@@ -1,0 +1,142 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 3.9%;
+    --foreground: 0 0% 98%;
+    --card: 0 0% 7%;
+    --card-foreground: 0 0% 98%;
+    --popover: 0 0% 7%;
+    --popover-foreground: 0 0% 98%;
+    --primary: 262 83% 58%;
+    --primary-foreground: 0 0% 98%;
+    --secondary: 0 0% 14.9%;
+    --secondary-foreground: 0 0% 98%;
+    --muted: 0 0% 14.9%;
+    --muted-foreground: 0 0% 63.9%;
+    --accent: 0 0% 14.9%;
+    --accent-foreground: 0 0% 98%;
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 0 0% 14.9%;
+    --input: 0 0% 14.9%;
+    --ring: 262 83% 58%;
+    --radius: 0.75rem;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-gray-800;
+  }
+  
+  body {
+    @apply bg-gray-950 text-gray-100;
+    background-image: 
+      radial-gradient(at 0% 0%, rgba(139, 92, 246, 0.1) 0%, transparent 50%),
+      radial-gradient(at 100% 100%, rgba(59, 130, 246, 0.1) 0%, transparent 50%);
+  }
+}
+
+@layer components {
+  .gradient-border {
+    position: relative;
+    background: linear-gradient(to right, #8b5cf6, #3b82f6);
+    padding: 1px;
+    border-radius: var(--radius);
+  }
+  
+  .gradient-border > * {
+    background: rgb(17, 17, 17);
+    border-radius: calc(var(--radius) - 1px);
+  }
+
+  .glow-text {
+    text-shadow: 0 0 20px rgba(139, 92, 246, 0.5);
+  }
+
+  .glass {
+    @apply bg-white/5 backdrop-blur-lg border border-white/10;
+  }
+
+  .card-hover {
+    @apply transition-all duration-300 hover:shadow-glow hover:border-primary-500/50;
+  }
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  @apply bg-gray-900;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply bg-gray-700 rounded-full;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  @apply bg-gray-600;
+}
+
+/* Selection styling */
+::selection {
+  @apply bg-primary-500/30;
+}
+
+/* DNA Helix Animation */
+.dna-helix {
+  animation: dna-rotate 4s ease-in-out infinite;
+}
+
+@keyframes dna-rotate {
+  0%, 100% {
+    transform: rotateY(0deg);
+  }
+  50% {
+    transform: rotateY(180deg);
+  }
+}
+
+/* Score circle animation */
+.score-circle {
+  animation: score-fill 1.5s ease-out forwards;
+}
+
+@keyframes score-fill {
+  0% {
+    stroke-dashoffset: 283;
+  }
+}
+
+/* Tier badge styles */
+.tier-novice { @apply bg-gray-500/20 text-gray-400 border-gray-500/30; }
+.tier-beginner { @apply bg-emerald-500/20 text-emerald-400 border-emerald-500/30; }
+.tier-intermediate { @apply bg-blue-500/20 text-blue-400 border-blue-500/30; }
+.tier-expert { @apply bg-purple-500/20 text-purple-400 border-purple-500/30; }
+.tier-whale { @apply bg-amber-500/20 text-amber-400 border-amber-500/30; }
+
+/* Achievement badge animation */
+.achievement-new {
+  animation: achievement-pop 0.5s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+}
+
+@keyframes achievement-pop {
+  0% {
+    transform: scale(0);
+    opacity: 0;
+  }
+  50% {
+    transform: scale(1.2);
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
