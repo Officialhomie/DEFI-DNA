@@ -77,24 +77,48 @@ export class SearchService {
     dbPool?: Pool,
     chainId: number = 8453 // Base Mainnet
   ) {
-    this.provider = new ethers.JsonRpcProvider(rpcUrl);
+    // Validate inputs
+    if (!rpcUrl || typeof rpcUrl !== 'string') {
+      throw new Error('Invalid RPC URL provided to SearchService');
+    }
+    if (!dnaSubscriberAddress || !ethers.isAddress(dnaSubscriberAddress)) {
+      throw new Error('Invalid DNA_SUBSCRIBER_ADDRESS provided');
+    }
+    if (!dnaReaderAddress || !ethers.isAddress(dnaReaderAddress)) {
+      throw new Error('Invalid DNA_READER_ADDRESS provided');
+    }
+
+    // Initialize provider with error handling
+    try {
+      this.provider = new ethers.JsonRpcProvider(rpcUrl);
+    } catch (error: any) {
+      throw new Error(`Failed to initialize blockchain provider: ${error.message}`);
+    }
+
     this.chainId = chainId;
-    this.dnaSubscriber = new ethers.Contract(
-      dnaSubscriberAddress,
-      DNASubscriberABI,
-      this.provider
-    );
-    this.dnaReader = new ethers.Contract(
-      dnaReaderAddress,
-      DNAReaderABI,
-      this.provider
-    );
-    // Initialize PositionManager contract
-    this.positionManager = new ethers.Contract(
-      BASE_POSITION_MANAGER,
-      POSITION_MANAGER_ABI,
-      this.provider
-    );
+
+    // Initialize contracts with error handling
+    try {
+      this.dnaSubscriber = new ethers.Contract(
+        dnaSubscriberAddress,
+        DNASubscriberABI,
+        this.provider
+      );
+      this.dnaReader = new ethers.Contract(
+        dnaReaderAddress,
+        DNAReaderABI,
+        this.provider
+      );
+      // Initialize PositionManager contract
+      this.positionManager = new ethers.Contract(
+        BASE_POSITION_MANAGER,
+        POSITION_MANAGER_ABI,
+        this.provider
+      );
+    } catch (error: any) {
+      throw new Error(`Failed to initialize contracts: ${error.message}`);
+    }
+
     this.db = dbPool;
 
     // Initialize Alchemy indexer if RPC URL contains Alchemy API key
@@ -102,8 +126,10 @@ export class SearchService {
       try {
         this.indexer = new AlchemyIndexerService(rpcUrl, chainId);
         console.log('✅ Alchemy indexer initialized');
-      } catch (error) {
-        console.warn('⚠️ Failed to initialize Alchemy indexer:', error);
+      } catch (error: any) {
+        console.warn('⚠️ Failed to initialize Alchemy indexer (will continue without it):', error.message);
+        // Continue without indexer - graceful degradation
+        this.indexer = undefined;
       }
     }
   }
