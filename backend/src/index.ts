@@ -23,11 +23,33 @@ if (process.env.DB_HOST && process.env.DB_NAME) {
       database: process.env.DB_NAME,
       user: process.env.DB_USER,
       password: process.env.DB_PASSWORD,
+      // Add connection timeout and retry settings
+      connectionTimeoutMillis: 5000,
+      idleTimeoutMillis: 30000,
+      max: 10, // Maximum number of clients in the pool
     });
-    console.log('✅ Database connection initialized');
-  } catch (error) {
-    console.warn('⚠️ Database connection failed, continuing without DB:', error);
+
+    // Test connection
+    dbPool.query('SELECT NOW()', (err) => {
+      if (err) {
+        console.warn('⚠️ Database connection test failed:', err.message);
+        dbPool = undefined; // Don't use broken connection
+      } else {
+        console.log('✅ Database connection initialized and tested');
+      }
+    });
+
+    // Handle pool errors gracefully
+    dbPool.on('error', (err) => {
+      console.error('⚠️ Database pool error:', err.message);
+      // Don't crash - just log the error
+    });
+  } catch (error: any) {
+    console.warn('⚠️ Database connection failed, continuing without DB:', error.message);
+    dbPool = undefined;
   }
+} else {
+  console.log('ℹ️ Database not configured (DB_HOST or DB_NAME missing) - continuing without DB');
 }
 
 // Initialize search service
@@ -91,7 +113,25 @@ app.get('/api/v1/search', async (req, res) => {
       });
     }
 
-    const result = await searchService.searchWallet(wallet);
+    // Add timeout protection for search requests
+    let result;
+    try {
+      result = await Promise.race([
+        searchService.searchWallet(wallet),
+        new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Search timeout after 30 seconds')), 30000)
+        )
+      ]) as any;
+    } catch (error: any) {
+      if (error.message?.includes('timeout')) {
+        return res.status(504).json({ 
+          error: 'Request timeout',
+          message: 'The search request took too long. Please try again.'
+        });
+      }
+      throw error; // Re-throw other errors to be caught by outer try-catch
+    }
+
     res.json(result);
   } catch (error: any) {
     console.error('Search error:', error);
@@ -126,8 +166,24 @@ app.get('/api/v1/profile/:address', async (req, res) => {
       });
     }
 
-    // Use search service to get wallet data
-    const walletData = await searchService.searchWallet(address);
+    // Use search service to get wallet data with timeout protection
+    let walletData;
+    try {
+      walletData = await Promise.race([
+        searchService.searchWallet(address),
+        new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Search timeout after 30 seconds')), 30000)
+        )
+      ]) as any;
+    } catch (error: any) {
+      if (error.message?.includes('timeout')) {
+        return res.status(504).json({ 
+          error: 'Request timeout',
+          message: 'The search request took too long. Please try again.'
+        });
+      }
+      throw error; // Re-throw other errors
+    }
 
     // Transform to profile format expected by frontend
     const profile = {
@@ -234,10 +290,38 @@ wss.on('connection', (ws) => {
   });
 });
 
-// Start server
+// Start server with error handling
 server.listen(PORT, () => {
   console.log(`🚀 DeFi DNA Backend running on port ${PORT}`);
   console.log(`📊 Health check: http://localhost:${PORT}/health`);
   console.log(`🔌 WebSocket: ws://localhost:${PORT}`);
   console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
+}).on('error', (error: any) => {
+  if (error.code === 'EADDRINUSE') {
+    console.error(`❌ Port ${PORT} is already in use. Please use a different port.`);
+    process.exit(1);
+  } else {
+    console.error('❌ Failed to start server:', error);
+    process.exit(1);
+  }
+});
+
+// Handle uncaught exceptions gracefully
+process.on('uncaughtException', (error) => {
+  console.error('❌ Uncaught Exception:', error);
+  // Don't exit in production - let Railway handle restarts
+  if (process.env.NODE_ENV === 'production') {
+    console.error('Continuing in production mode...');
+  } else {
+    process.exit(1);
+  }
+});
+
+// Handle unhandled promise rejections
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
+  // Don't exit in production
+  if (process.env.NODE_ENV !== 'production') {
+    process.exit(1);
+  }
 });
