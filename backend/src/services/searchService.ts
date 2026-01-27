@@ -132,8 +132,7 @@ export class SearchService {
         this.indexer = new AlchemyIndexerService(rpcUrl, chainId);
         console.log('✅ Alchemy indexer initialized');
       } catch (error: any) {
-        console.warn('⚠️ Failed to initialize Alchemy indexer (will continue without it):', error.message);
-        // Continue without indexer - graceful degradation
+        console.warn('⚠️ Failed to initialize Alchemy indexer:', error.message);
         this.indexer = undefined;
       }
     }
@@ -141,33 +140,24 @@ export class SearchService {
 
   /**
    * Search for wallet interactions across all pools
-   * Now uses database caching and Alchemy indexer for comprehensive historical data
-   * CRITICAL-2 fix: Comprehensive event indexing
-   * CRITICAL-3 fix: Database caching and persistence
    */
   async searchWallet(walletAddress: string): Promise<WalletSearchResult> {
-    // Validate address
     if (!ethers.isAddress(walletAddress)) {
       throw new Error('Invalid wallet address');
     }
 
     const normalizedAddress = ethers.getAddress(walletAddress);
 
-    // Step 1: Check database cache first (CRITICAL-3: caching)
-    let cachedUser: dbQueries.UserRow | null = null;
+    // Check database cache first
     if (this.db) {
       try {
-        cachedUser = await dbQueries.getUser(this.db, normalizedAddress);
+        const cachedUser = await dbQueries.getUser(this.db, normalizedAddress);
         
-        // If cached data exists and is fresh (< 5 minutes old), return it
         if (cachedUser) {
           const cacheAge = Date.now() - new Date(cachedUser.updated_at).getTime();
-          const cacheMaxAge = 5 * 60 * 1000; // 5 minutes
+          const cacheMaxAge = 5 * 60 * 1000;
           
           if (cacheAge < cacheMaxAge) {
-            console.log(`✅ Returning cached data for ${normalizedAddress} (age: ${Math.round(cacheAge / 1000)}s)`);
-            
-            // Fetch pool interactions and recent activity from DB
             const poolInteractions = await this.getPoolInteractionsFromDB(normalizedAddress);
             const recentActivity = await this.getRecentActivityFromDB(normalizedAddress);
             
@@ -188,53 +178,36 @@ export class SearchService {
               poolInteractions,
               recentActivity,
             };
-          } else {
-            console.log(`⚠️ Cached data for ${normalizedAddress} is stale (age: ${Math.round(cacheAge / 1000)}s), refreshing...`);
           }
         }
       } catch (error: any) {
-        console.error('Error fetching cached user data:', error.message);
-        // Continue to fetch fresh data
+        console.error('Error fetching cached data:', error.message);
       }
     }
 
-    // Step 2: Fetch fresh data from blockchain and indexer
-    // Fetch on-chain data from DNASubscriber (may be empty if not subscribed)
+    // Fetch fresh data
     const onChainData = await this.fetchOnChainData(normalizedAddress);
-
-    // Fetch database data if available (for pool stats)
     const dbData = this.db ? await this.fetchDatabaseData(normalizedAddress) : null;
 
-    // Fetch indexed data from Alchemy (comprehensive historical data)
+    // Fetch indexed data from Alchemy
     let indexedData: IndexedWalletData | null = null;
     if (this.indexer) {
       try {
-        // Get deployment block to set reasonable fromBlock
         const deploymentBlock = await this.indexer.getUniswapV4DeploymentBlock();
         const currentBlock = await this.provider.getBlockNumber();
         
-        // CRITICAL-4: Use indexer to get ALL historical data from deployment block
-        // No longer limited to arbitrary block ranges - uses full history
-        const fromBlock = deploymentBlock > 0 
-          ? deploymentBlock 
-          : UNISWAP_V4_DEPLOYMENT_BLOCK; // Fallback to known deployment block
-        
         indexedData = await this.indexer.getWalletData(
           normalizedAddress,
-          fromBlock,
+          deploymentBlock,
           currentBlock
         );
-        console.log(`✅ Indexed ${indexedData.totalTransactions} transactions, ${indexedData.positions.length} positions, ${indexedData.swaps.length} swaps`);
       } catch (error: any) {
         console.error('Error fetching indexed data:', error.message);
-        // Continue without indexer data - fallback to on-chain queries
       }
     }
 
-    // Fetch position details (from both DNASubscriber, PositionManager, and indexer)
     const positions = await this.fetchPositions(normalizedAddress, indexedData);
 
-    // Aggregate pool interactions (now includes swap data from indexer)
     const poolInteractions = await this.aggregatePoolInteractions(
       normalizedAddress,
       onChainData,
@@ -243,15 +216,12 @@ export class SearchService {
       indexedData
     );
 
-    // Calculate DNA score and tier (from DNASubscriber if available)
     const dnaScore = await this.calculateDNAScore(normalizedAddress);
     const tier = await this.getTier(normalizedAddress);
 
-    // Calculate actual position counts from fetched positions
     const totalPositions = positions.length;
     const activePositions = positions.filter(p => p.isActive).length;
     
-    // Extract unique pools from positions and swaps
     const uniquePoolsSet = new Set<string>();
     positions.forEach(p => {
       if (p.poolId && p.poolId !== '0x0000000000000000000000000000000000000000000000000000000000000000') {
@@ -267,17 +237,14 @@ export class SearchService {
     }
     const uniquePools = uniquePoolsSet.size;
 
-    // Calculate swap count and volume from indexer data
     const totalSwaps = indexedData 
       ? indexedData.swaps.length 
       : (Number(onChainData.totalSwaps) || 0);
     
-    // Calculate volume from swaps (simplified - would need price data for accurate USD)
     const totalVolumeUsd = indexedData && indexedData.swaps.length > 0
       ? this.calculateVolumeFromSwaps(indexedData.swaps)
       : (Number(onChainData.totalVolumeUsd) / 1e18 || 0);
 
-    // Use indexer timestamps if available (more comprehensive)
     const firstActionTimestamp = indexedData && indexedData.firstTransactionTimestamp > 0
       ? indexedData.firstTransactionTimestamp
       : (Number(onChainData.firstActionTimestamp) || 0);
@@ -286,7 +253,6 @@ export class SearchService {
       ? indexedData.lastTransactionTimestamp
       : (Number(onChainData.lastActionTimestamp) || 0);
 
-    // Build recent activity from indexed data
     const recentActivity = indexedData 
       ? this.buildRecentActivityFromIndexedData(indexedData)
       : (dbData?.recentActivity || undefined);
@@ -309,14 +275,13 @@ export class SearchService {
       recentActivity,
     };
 
-    // Step 3: Save to database for caching (CRITICAL-3: persistence)
+    // Save to database for caching
     if (this.db) {
       try {
         await this.saveToDatabase(normalizedAddress, result, positions);
         console.log(`✅ Saved data to database for ${normalizedAddress}`);
       } catch (error: any) {
         console.error('Error saving to database:', error.message);
-        // Don't fail the request if database save fails
       }
     }
 
@@ -324,7 +289,7 @@ export class SearchService {
   }
 
   /**
-   * Save wallet data to database for caching
+   * Save wallet data to database
    */
   private async saveToDatabase(
     address: string,
@@ -534,14 +499,12 @@ export class SearchService {
 
   /**
    * Fetch position details for the wallet
-   * CRITICAL-4 fix: Uses database first (full history), then indexer, then blockchain fallback
-   * No longer limited to 50k blocks - accesses ALL historical positions
    */
   private async fetchPositions(address: string, indexedData?: IndexedWalletData | null) {
     const positions: any[] = [];
     const tokenIdSet = new Set<string>();
 
-    // Step 0: Check database first (CRITICAL-4: full historical data from database)
+    // Check database first
     if (this.db) {
       try {
         const dbPositions = await dbQueries.getUserPositions(this.db, address);
@@ -562,11 +525,10 @@ export class SearchService {
         }
       } catch (error: any) {
         console.error('Error fetching positions from database:', error.message);
-        // Continue to other sources
       }
     }
 
-    // Step 1: Get positions from DNASubscriber (subscribed positions)
+    // Get positions from DNASubscriber
     try {
       const subscribedTokenIds = await this.dnaSubscriber.getOwnerTokenIds(address);
       
@@ -607,24 +569,21 @@ export class SearchService {
       console.log('No subscribed positions found (this is normal if positions not subscribed)');
     }
 
-    // Step 2: Use indexed data if available (comprehensive historical data)
+    // Use indexed data
     if (indexedData && indexedData.positions.length > 0) {
       console.log(`Using indexed data: ${indexedData.positions.length} position transfers found`);
       
-      // Process indexed position transfers
       for (const transfer of indexedData.positions) {
         if (tokenIdSet.has(transfer.tokenId)) {
-          continue; // Already processed from DNASubscriber
+          continue;
         }
 
         try {
-          // Verify current ownership
           const currentOwner = await this.positionManager.ownerOf(transfer.tokenId);
           if (currentOwner.toLowerCase() !== address.toLowerCase()) {
-            continue; // Not owned by this address anymore
+            continue;
           }
 
-          // Use DNAReader to get position snapshot
           const snapshot = await this.dnaReader.getPositionSnapshot(transfer.tokenId);
           
           if (snapshot.owner && snapshot.owner.toLowerCase() === address.toLowerCase()) {
@@ -659,140 +618,117 @@ export class SearchService {
       }
     }
 
-    // Step 3: Fallback to querying PositionManager Transfer events from blockchain
-    // CRITICAL-4 fix: Only use this if database and indexer both failed
-    // Uses deployment block and chunked queries to get full history
-    // This is a last resort - database and indexer should handle most cases
-    if (positions.length === 0 && (!indexedData || indexedData.positions.length === 0)) {
+    // Query blockchain if no positions found
+    if (positions.length === 0) {
       try {
-        console.log(`⚠️ No positions found in database or indexer, querying blockchain for ${address}...`);
+        console.log(`Querying blockchain for ${address}...`);
         
-        // Get Transfer events where this address received tokens (minted or transferred to)
         const currentBlock = await this.provider.getBlockNumber();
-        
-        // CRITICAL-4 fix: Query from V4 deployment block to get ALL historical positions
-        // This ensures we get positions from May 2024 onwards, not just recent ones
         const fromBlock = UNISWAP_V4_DEPLOYMENT_BLOCK;
         
         console.log(`Querying blocks ${fromBlock} to ${currentBlock} (${currentBlock - fromBlock} blocks)`);
       
-      const transferFilter = this.positionManager.filters.Transfer(null, address);
-      
-      // CRITICAL-4: Query in chunks to avoid RPC limits
-      // Most RPC providers limit eth_getLogs to 10k-100k blocks
-      const CHUNK_SIZE = 50000; // Safe chunk size
-      let allTransfers: any[] = [];
-      let allFromTransfers: any[] = [];
-      
-      // Query in chunks from deployment block to current
-      for (let chunkStart = fromBlock; chunkStart < currentBlock; chunkStart += CHUNK_SIZE) {
-        const chunkEnd = Math.min(chunkStart + CHUNK_SIZE, currentBlock);
+        const transferFilter = this.positionManager.filters.Transfer(null, address);
+        const CHUNK_SIZE = 50000;
+        let allTransfers: any[] = [];
+        let allFromTransfers: any[] = [];
         
-        try {
-          console.log(`  Querying chunk: ${chunkStart} to ${chunkEnd}...`);
+        for (let chunkStart = fromBlock; chunkStart < currentBlock; chunkStart += CHUNK_SIZE) {
+          const chunkEnd = Math.min(chunkStart + CHUNK_SIZE, currentBlock);
           
-          const transfers = await this.positionManager.queryFilter(
-            transferFilter,
-            chunkStart,
-            chunkEnd
-          );
-          allTransfers.push(...transfers);
-          
-          // Also check transfers FROM this address
-          const fromTransfers = await this.positionManager.queryFilter(
-            this.positionManager.filters.Transfer(address, null),
-            chunkStart,
-            chunkEnd
-          );
-          allFromTransfers.push(...fromTransfers);
-        } catch (error: any) {
-          console.error(`Error querying chunk ${chunkStart}-${chunkEnd}:`, error.message);
-          // Continue with next chunk
-        }
-      }
-      
-      console.log(`Found ${allTransfers.length} Transfer events to ${address} (queried ${currentBlock - fromBlock} blocks)`);
-
-      // Build set of token IDs that were minted to or transferred to this address
-      const receivedTokenIds = new Set<string>();
-      for (const event of allTransfers) {
-        if ('args' in event && event.args && event.args.tokenId) {
-          receivedTokenIds.add(event.args.tokenId.toString());
-        }
-      }
-
-      // Remove tokens that were transferred away
-      for (const event of allFromTransfers) {
-        if ('args' in event && event.args && event.args.to && event.args.to.toLowerCase() !== address.toLowerCase()) {
-          receivedTokenIds.delete(event.args.tokenId.toString());
-        }
-      }
-
-      console.log(`Found ${receivedTokenIds.size} unique positions for ${address}`);
-
-      // Fetch details for positions not already in our list
-      // CRITICAL-4: Don't limit to 20 - we want all positions from full history
-      let fetchedCount = 0;
-      const maxToFetch = 100; // Increased limit for comprehensive historical data
-
-      for (const tokenIdStr of receivedTokenIds) {
-        if (tokenIdSet.has(tokenIdStr)) {
-          continue; // Already have this position from database or indexer
+          try {
+            console.log(`  Querying chunk: ${chunkStart} to ${chunkEnd}...`);
+            
+            const transfers = await this.positionManager.queryFilter(
+              transferFilter,
+              chunkStart,
+              chunkEnd
+            );
+            allTransfers.push(...transfers);
+            
+            const fromTransfers = await this.positionManager.queryFilter(
+              this.positionManager.filters.Transfer(address, null),
+              chunkStart,
+              chunkEnd
+            );
+            allFromTransfers.push(...fromTransfers);
+          } catch (error: any) {
+            console.error(`Error querying chunk ${chunkStart}-${chunkEnd}:`, error.message);
+          }
         }
         
-        if (fetchedCount >= maxToFetch) {
-          console.log(`⚠️ Reached fetch limit (${maxToFetch}), skipping remaining positions`);
-          break;
+        console.log(`Found ${allTransfers.length} Transfer events to ${address}`);
+
+        const receivedTokenIds = new Set<string>();
+        for (const event of allTransfers) {
+          if ('args' in event && event.args && event.args.tokenId) {
+            receivedTokenIds.add(event.args.tokenId.toString());
+          }
         }
 
-        try {
-          // Verify current ownership
-          const currentOwner = await this.positionManager.ownerOf(tokenIdStr);
-          if (currentOwner.toLowerCase() !== address.toLowerCase()) {
-            continue; // Not owned by this address anymore
+        for (const event of allFromTransfers) {
+          if ('args' in event && event.args && event.args.to && event.args.to.toLowerCase() !== address.toLowerCase()) {
+            receivedTokenIds.delete(event.args.tokenId.toString());
+          }
+        }
+
+        console.log(`Found ${receivedTokenIds.size} unique positions for ${address}`);
+
+        let fetchedCount = 0;
+        const maxToFetch = 100;
+
+        for (const tokenIdStr of receivedTokenIds) {
+          if (tokenIdSet.has(tokenIdStr)) {
+            continue;
+          }
+          
+          if (fetchedCount >= maxToFetch) {
+            console.log(`⚠️ Reached fetch limit (${maxToFetch}), skipping remaining positions`);
+            break;
           }
 
-          // Use DNAReader to get position snapshot (includes poolId computation)
-          const snapshot = await this.dnaReader.getPositionSnapshot(tokenIdStr);
-          
-          if (snapshot.owner && snapshot.owner.toLowerCase() === address.toLowerCase()) {
-            // Convert poolId bytes32 to hex string
-            let poolIdHex = '0x';
-            if (typeof snapshot.poolId === 'string') {
-              poolIdHex = snapshot.poolId.startsWith('0x') 
-                ? snapshot.poolId 
-                : '0x' + snapshot.poolId;
-            } else if (snapshot.poolId) {
-              // Handle BigNumber or other types
-              const poolIdStr = snapshot.poolId.toString();
-              poolIdHex = poolIdStr.startsWith('0x') 
-                ? poolIdStr 
-                : '0x' + poolIdStr.padStart(64, '0');
+          try {
+            const currentOwner = await this.positionManager.ownerOf(tokenIdStr);
+            if (currentOwner.toLowerCase() !== address.toLowerCase()) {
+              continue;
             }
 
-            positions.push({
-              tokenId: tokenIdStr,
-              poolId: poolIdHex,
-              liquidity: snapshot.liquidity?.toString() || '0',
-              tickLower: Number(snapshot.tickLower) || 0,
-              tickUpper: Number(snapshot.tickUpper) || 0,
-              isActive: snapshot.isInRange || false,
-              isSubscribed: tokenIdSet.has(tokenIdStr),
-            });
-            fetchedCount++;
-          }
-        } catch (error: any) {
-          // Position might not exist or be invalid, skip it
-          if (!error.message?.includes('ERC721: invalid token ID')) {
-            console.error(`Error fetching position ${tokenIdStr}:`, error.message);
+            const snapshot = await this.dnaReader.getPositionSnapshot(tokenIdStr);
+            
+            if (snapshot.owner && snapshot.owner.toLowerCase() === address.toLowerCase()) {
+              let poolIdHex = '0x';
+              if (typeof snapshot.poolId === 'string') {
+                poolIdHex = snapshot.poolId.startsWith('0x') 
+                  ? snapshot.poolId 
+                  : '0x' + snapshot.poolId;
+              } else if (snapshot.poolId) {
+                const poolIdStr = snapshot.poolId.toString();
+                poolIdHex = poolIdStr.startsWith('0x') 
+                  ? poolIdStr 
+                  : '0x' + poolIdStr.padStart(64, '0');
+              }
+
+              positions.push({
+                tokenId: tokenIdStr,
+                poolId: poolIdHex,
+                liquidity: snapshot.liquidity?.toString() || '0',
+                tickLower: Number(snapshot.tickLower) || 0,
+                tickUpper: Number(snapshot.tickUpper) || 0,
+                isActive: snapshot.isInRange || false,
+                isSubscribed: tokenIdSet.has(tokenIdStr),
+              });
+              fetchedCount++;
+            }
+          } catch (error: any) {
+            if (!error.message?.includes('ERC721: invalid token ID')) {
+              console.error(`Error fetching position ${tokenIdStr}:`, error.message);
+            }
           }
         }
-      }
 
         console.log(`Fetched ${fetchedCount} additional positions from PositionManager`);
       } catch (error: any) {
         console.error('Error querying PositionManager events:', error.message);
-        // Continue with subscribed positions only
       }
     }
 
@@ -800,7 +736,7 @@ export class SearchService {
   }
 
   /**
-   * Aggregate pool interactions from multiple sources (now includes indexed swap data)
+   * Aggregate pool interactions from multiple sources
    */
   private async aggregatePoolInteractions(
     address: string,
@@ -875,7 +811,6 @@ export class SearchService {
       }
     }
 
-    // Add indexed swap data (CRITICAL-2: comprehensive swap tracking)
     if (indexedData && indexedData.swaps.length > 0) {
       for (const swap of indexedData.swaps) {
         const poolId = swap.poolId.toLowerCase();
@@ -897,8 +832,6 @@ export class SearchService {
         const pool = poolMap.get(poolId)!;
         pool.totalSwaps += 1;
         
-        // Calculate volume (simplified - would need price data for accurate USD)
-        // Using absolute value of amount0 + amount1 as approximation
         const volume = (Number(swap.amount0) + Number(swap.amount1)) / 1e18;
         pool.totalVolumeUsd += Math.abs(volume);
         
@@ -918,15 +851,13 @@ export class SearchService {
 
   /**
    * Calculate total volume from swap events
-   * Simplified calculation - would need price feeds for accurate USD values
    */
   private calculateVolumeFromSwaps(swaps: Array<{ amount0: bigint; amount1: bigint }>): number {
     let totalVolume = 0;
     for (const swap of swaps) {
-      // Use absolute values and sum (simplified - actual volume calculation is more complex)
       const volume0 = Math.abs(Number(swap.amount0)) / 1e18;
       const volume1 = Math.abs(Number(swap.amount1)) / 1e18;
-      totalVolume += Math.max(volume0, volume1); // Use larger of the two
+      totalVolume += Math.max(volume0, volume1);
     }
     return totalVolume;
   }
@@ -947,7 +878,6 @@ export class SearchService {
       txHash?: string;
     }> = [];
 
-    // Add swaps
     for (const swap of indexedData.swaps.slice(0, 20)) {
       activity.push({
         type: 'swap',
@@ -957,27 +887,24 @@ export class SearchService {
       });
     }
 
-    // Add position mints
     for (const position of indexedData.positions.filter(p => p.type === 'mint').slice(0, 10)) {
       activity.push({
         type: 'mint',
-        poolId: '', // Would need to fetch from position
+        poolId: '',
         timestamp: position.timestamp,
         txHash: position.txHash,
       });
     }
 
-    // Add position burns
     for (const position of indexedData.positions.filter(p => p.type === 'burn').slice(0, 10)) {
       activity.push({
         type: 'burn',
-        poolId: '', // Would need to fetch from position
+        poolId: '',
         timestamp: position.timestamp,
         txHash: position.txHash,
       });
     }
 
-    // Sort by timestamp descending
     return activity.sort((a, b) => b.timestamp - a.timestamp).slice(0, 50);
   }
 
