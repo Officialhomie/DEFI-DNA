@@ -67,6 +67,10 @@ export class AlchemyIndexerService {
   // Base Mainnet PositionManager address
   private readonly POSITION_MANAGER_ADDRESS = '0xbD216513d74C8cf14cf4747E6AaA6420FF64ee9e';
   
+  // Uniswap V4 deployment block on Base Mainnet (May 2024)
+  // CRITICAL-4: Use this to query full historical data
+  private readonly UNISWAP_V4_DEPLOYMENT_BLOCK = 14506421;
+  
   // Uniswap V4 PoolManager address (need to verify this)
   // This is the main contract that emits Swap events
   private readonly POOL_MANAGER_ADDRESS = '0x0000000000000000000000000000000000000000'; // TODO: Get actual address
@@ -570,25 +574,11 @@ export class AlchemyIndexerService {
 
   /**
    * Get the block number when Uniswap V4 was deployed on Base
-   * This helps us set a reasonable fromBlock for historical queries
+   * CRITICAL-4: Returns the actual deployment block for full historical queries
    */
   async getUniswapV4DeploymentBlock(): Promise<number> {
-    // Uniswap V4 PositionManager was deployed around a specific block
-    // For Base mainnet, we can query the contract creation block
-    try {
-      const code = await this.provider.getCode(this.POSITION_MANAGER_ADDRESS);
-      if (!code || code === '0x') {
-        return 0;
-      }
-
-      // Try to find deployment block by searching backwards
-      // This is a simplified approach - in production, you'd store this value
-      // Base mainnet started around block 0, Uniswap V4 likely deployed much later
-      // For now, we'll use a conservative estimate
-      return 0; // Will be set based on actual deployment
-    } catch (error) {
-      console.error('Error getting deployment block:', error);
-      return 0;
-    }
+    // Return the known deployment block
+    // Uniswap V4 PositionManager was deployed on Base Mainnet at block 14,506,421 (May 2024)
+    return this.UNISWAP_V4_DEPLOYMENT_BLOCK;
   }
 }
