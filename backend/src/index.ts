@@ -142,10 +142,55 @@ app.get('/api/v1/search', async (req, res) => {
   }
 });
 
-// API routes placeholder
+// Leaderboard endpoint (CRITICAL-3: database-powered)
 app.get('/api/v1/leaderboard', async (req, res) => {
-  // TODO: Implement leaderboard endpoint
-  res.json([]);
+  try {
+    const limit = parseInt(req.query.limit as string) || 100;
+    const offset = parseInt(req.query.offset as string) || 0;
+
+    if (!dbPool) {
+      return res.status(503).json({
+        error: 'Database unavailable',
+        message: 'Leaderboard requires database connection. Please configure database.',
+        data: []
+      });
+    }
+
+    // Import queries dynamically to avoid issues if DB is not available
+    const dbQueries = await import('./db/queries');
+    
+    const users = await dbQueries.getLeaderboard(dbPool, limit, offset);
+    const total = await dbQueries.getLeaderboardCount(dbPool);
+
+    res.json({
+      users: users.map(user => ({
+        address: user.address,
+        dnaScore: user.dna_score,
+        tier: user.tier,
+        totalSwaps: user.total_swaps,
+        totalVolumeUsd: Number(user.total_volume_usd) || 0,
+        totalFeesEarned: Number(user.total_fees_earned) || 0,
+        totalPositions: user.total_positions,
+        activePositions: user.active_positions,
+        uniquePools: user.unique_pools,
+        firstActionTimestamp: user.first_action_timestamp ? Number(user.first_action_timestamp) : null,
+        lastActionTimestamp: user.last_action_timestamp ? Number(user.last_action_timestamp) : null,
+      })),
+      pagination: {
+        total,
+        limit,
+        offset,
+        hasMore: offset + limit < total,
+      },
+    });
+  } catch (error: any) {
+    console.error('Leaderboard error:', error);
+    res.status(500).json({
+      error: 'Failed to fetch leaderboard',
+      message: error.message || 'An error occurred while fetching leaderboard data',
+      data: []
+    });
+  }
 });
 
 app.get('/api/v1/profile/:address', async (req, res) => {
