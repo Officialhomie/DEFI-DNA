@@ -11,27 +11,23 @@ dotenv.config();
  * Runs SQL migrations to set up the database schema
  */
 async function migrate() {
-  // Get database connection from environment
-  const dbConfig = {
-    host: process.env.DB_HOST,
-    port: parseInt(process.env.DB_PORT || '5432'),
-    database: process.env.DB_NAME,
-    user: process.env.DB_USER,
-    password: process.env.DB_PASSWORD,
-  };
+  // Support DATABASE_URL (Railway, Supabase) or individual vars
+  const connectionString = process.env.DATABASE_URL;
+  const pool = connectionString
+    ? new Pool({ connectionString })
+    : new Pool({
+        host: process.env.DB_HOST,
+        port: parseInt(process.env.DB_PORT || '5432'),
+        database: process.env.DB_NAME,
+        user: process.env.DB_USER,
+        password: process.env.DB_PASSWORD,
+      });
 
-  // Validate required environment variables
-  if (!dbConfig.host || !dbConfig.database || !dbConfig.user) {
+  if (!connectionString && (!process.env.DB_HOST || !process.env.DB_NAME || process.env.DB_USER)) {
     console.error('❌ Missing required database environment variables:');
-    console.error('   Required: DB_HOST, DB_NAME, DB_USER, DB_PASSWORD');
-    console.error('   Current values:');
-    console.error(`   DB_HOST: ${dbConfig.host || 'NOT SET'}`);
-    console.error(`   DB_NAME: ${dbConfig.database || 'NOT SET'}`);
-    console.error(`   DB_USER: ${dbConfig.user || 'NOT SET'}`);
+    console.error('   Use DATABASE_URL or DB_HOST, DB_NAME, DB_USER, DB_PASSWORD');
     process.exit(1);
   }
-
-  const pool = new Pool(dbConfig);
 
   try {
     // Test connection
