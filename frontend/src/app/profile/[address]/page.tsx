@@ -88,14 +88,16 @@ interface ProfileResponse {
 
 // API fetch function
 async function fetchProfile(address: string): Promise<ProfileResponse> {
-  const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/profile/${address}`);
-  if (!res.ok) {
-    if (res.status === 404) {
+  const { getProfile, ApiError } = await import('@/lib/api');
+  try {
+    const data = await getProfile(address);
+    return data as ProfileResponse;
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 404) {
       throw new Error('PROFILE_NOT_FOUND');
     }
-    throw new Error('Failed to fetch profile');
+    throw e;
   }
-  return res.json();
 }
 
 export default function ProfilePage() {

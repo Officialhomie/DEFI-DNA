@@ -17,10 +17,14 @@ interface UseWebSocketOptions {
   onAction?: (action: any) => void;
   onAchievement?: (achievement: any) => void;
   onUpdate?: (data: any) => void;
+  onConnect?: () => void;
+  onDisconnect?: () => void;
 }
 
 export function useWebSocket(options: UseWebSocketOptions = {}) {
-  const { address, onAction, onAchievement, onUpdate } = options;
+  const { address, onAction, onAchievement, onUpdate, onConnect, onDisconnect } = options;
+  const optionsRef = useRef(options);
+  optionsRef.current = options;
   const [isConnected, setIsConnected] = useState(false);
   const [lastMessage, setLastMessage] = useState<WebSocketMessage | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
@@ -41,6 +45,7 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
       ws.onopen = () => {
         console.log('WebSocket connected');
         setIsConnected(true);
+        optionsRef.current.onConnect?.();
 
         // Subscribe to address if provided
         if (address) {
@@ -110,6 +115,7 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
       ws.onclose = () => {
         console.log('WebSocket disconnected');
         setIsConnected(false);
+        optionsRef.current.onDisconnect?.();
         wsRef.current = null;
 
         // Attempt to reconnect after 5 seconds
